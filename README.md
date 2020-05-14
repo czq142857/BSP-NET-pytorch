@@ -1,6 +1,8 @@
 # BSP-NET-pytorch
 PyTorch 1.2 implementation of [BSP-Net: Generating Compact Meshes via Binary Space Partitioning](https://arxiv.org/abs/1911.06971), [Zhiqin Chen](https://www.sfu.ca/~zhiqinc/), [Andrea Tagliasacchi](https://gfx.uvic.ca/people/ataiya/), [Hao (Richard) Zhang](https://www.cs.sfu.ca/~haoz/).
 
+### [Paper](https://arxiv.org/abs/1911.06971)  |   [Oral video](https://youtu.be/9-ixexpjN-8)  |   [Project page](https://bsp-net.github.io)
+
 <img src='img/teaser.png' />
 
 ## Other Implementations
