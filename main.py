@@ -1,6 +1,4 @@
 import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
 import numpy as np
 
 from modelAE import BSP_AE
@@ -10,12 +8,13 @@ import argparse
 import h5py
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--phase", action="store", dest="phase", default=1, type=int, help="phase 0 = continuous, phase 1 = hard discrete, phase 2 = hard discrete with L_overlap, phase 3 = soft discrete [1]")
+parser.add_argument("--phase", action="store", dest="phase", default=1, type=int, help="phase 0 = continuous, phase 1 = hard discrete, phase 2 = hard discrete with L_overlap, phase 3 = soft discrete, phase 4 = soft discrete with L_overlap [1]")
 #phase 0 continuous for better convergence
 #phase 1 hard discrete for bsp
 #phase 2 hard discrete for bsp with L_overlap
 #phase 3 soft discrete for bsp
-#use [phase 0 -> phase 1] or [phase 0 -> phase 2] or [phase 0 -> phase 3]
+#phase 4 soft discrete for bsp with L_overlap
+#use [phase 0 -> phase 1] or [phase 0 -> phase 2] or [phase 0 -> phase 3] or [phase 0 -> phase 4]
 parser.add_argument("--epoch", action="store", dest="epoch", default=0, type=int, help="Epoch to train [0]")
 parser.add_argument("--iteration", action="store", dest="iteration", default=0, type=int, help="Iteration to train. Either epoch or iteration need to be zero [0]")
 parser.add_argument("--learning_rate", action="store", dest="learning_rate", default=0.0001, type=float, help="Learning rate for adam [0.0001]")
@@ -31,8 +30,12 @@ parser.add_argument("--end", action="store", dest="end", default=16, type=int, h
 parser.add_argument("--ae", action="store_true", dest="ae", default=False, help="True for ae [False]")
 parser.add_argument("--svr", action="store_true", dest="svr", default=False, help="True for svr [False]")
 parser.add_argument("--getz", action="store_true", dest="getz", default=False, help="True for getting latent codes [False]")
+parser.add_argument("--gpu", action="store", dest="gpu", default="0", help="Which GPU to use [0]")
 FLAGS = parser.parse_args()
 
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]=FLAGS.gpu
 
 
 if not os.path.exists(FLAGS.sample_dir):

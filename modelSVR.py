@@ -30,7 +30,7 @@ class generator(nn.Module):
 		self.convex_layer_weights = nn.Parameter(convex_layer_weights)
 		nn.init.normal_(self.convex_layer_weights, mean=0.0, std=0.02)
 
-	def forward(self, points, plane_m, is_training=False):
+	def forward(self, points, plane_m, convex_mask=None, is_training=False):
 		#level 1
 		h1 = torch.matmul(points, plane_m)
 		h1 = torch.clamp(h1, min=0)
@@ -39,7 +39,10 @@ class generator(nn.Module):
 		h2 = torch.matmul(h1, (self.convex_layer_weights>0.01).float())
 
 		#level 3
-		h3 = torch.min(h2, dim=2, keepdim=True)[0]
+		if convex_mask is None:
+			h3 = torch.min(h2, dim=2, keepdim=True)[0]
+		else:
+			h3 = torch.min(h2+convex_mask, dim=2, keepdim=True)[0]
 
 		return h2,h3
 
@@ -193,7 +196,7 @@ class bsp_network(nn.Module):
 		self.decoder = decoder(self.ef_dim, self.p_dim)
 		self.generator = generator(self.p_dim, self.c_dim)
 
-	def forward(self, inputs, z_vector, plane_m, point_coord, is_training=False):
+	def forward(self, inputs, z_vector, plane_m, point_coord, convex_mask=None, is_training=False):
 		if is_training:
 			z_vector = self.img_encoder(inputs, is_training=is_training)
 			plane_m = None
@@ -205,7 +208,7 @@ class bsp_network(nn.Module):
 			if z_vector is not None:
 				plane_m = self.decoder(z_vector, is_training=is_training)
 			if point_coord is not None:
-				net_out_convexes, net_out = self.generator(point_coord, plane_m, is_training=is_training)
+				net_out_convexes, net_out = self.generator(point_coord, plane_m, convex_mask=convex_mask, is_training=is_training)
 			else:
 				net_out_convexes = None
 				net_out = None
@@ -334,7 +337,21 @@ class BSP_SVR(object):
 		return "{}_ae_{}".format(
 				self.dataset_name, self.input_size)
 
-	def train(self, config):
+	def load(self):
+		#load previous checkpoint
+		checkpoint_txt = os.path.join(self.checkpoint_path, "checkpoint")
+		if os.path.exists(checkpoint_txt):
+			fin = open(checkpoint_txt)
+			model_dir = fin.readline().strip()
+			fin.close()
+			self.bsp_network.load_state_dict(torch.load(model_dir))
+			print(" [*] Load SUCCESS")
+			return True
+		else:
+			print(" [!] Load failed...")
+			return False
+
+	def loadAE(self):
 		#load AE weights
 		checkpoint_txt = os.path.join(self.checkpoint_AE_path, "checkpoint")
 		if os.path.exists(checkpoint_txt):
@@ -343,9 +360,37 @@ class BSP_SVR(object):
 			fin.close()
 			self.bsp_network.load_state_dict(torch.load(model_dir), strict=False)
 			print(" [*] Load SUCCESS")
+			return True
 		else:
 			print(" [!] Load failed...")
-			exit(-1)
+			return False
+
+	def save(self,epoch):
+		if not os.path.exists(self.checkpoint_path):
+			os.makedirs(self.checkpoint_path)
+		save_dir = os.path.join(self.checkpoint_path,self.checkpoint_name+"-"+str(epoch)+".pth")
+		self.checkpoint_manager_pointer = (self.checkpoint_manager_pointer+1)%self.max_to_keep
+		#delete checkpoint
+		if self.checkpoint_manager_list[self.checkpoint_manager_pointer] is not None:
+			if os.path.exists(self.checkpoint_manager_list[self.checkpoint_manager_pointer]):
+				os.remove(self.checkpoint_manager_list[self.checkpoint_manager_pointer])
+		#save checkpoint
+		torch.save(self.bsp_network.state_dict(), save_dir)
+		#update checkpoint manager
+		self.checkpoint_manager_list[self.checkpoint_manager_pointer] = save_dir
+		#write file
+		checkpoint_txt = os.path.join(self.checkpoint_path, "checkpoint")
+		fout = open(checkpoint_txt, 'w')
+		for i in range(self.max_to_keep):
+			pointer = (self.checkpoint_manager_pointer+self.max_to_keep-i)%self.max_to_keep
+			if self.checkpoint_manager_list[pointer] is not None:
+				fout.write(self.checkpoint_manager_list[pointer]+"\n")
+		fout.close()
+
+
+	def train(self, config):
+		#load AE weights
+		if not self.loadAE(): exit(-1)
 
 		shape_num = len(self.data_pixels)
 		batch_index_list = np.arange(shape_num)
@@ -401,47 +446,10 @@ class BSP_SVR(object):
 			if epoch%10==9:
 				self.test_1(config,"train_"+str(epoch))
 			if epoch%100==99:
-				if not os.path.exists(self.checkpoint_path):
-					os.makedirs(self.checkpoint_path)
-				save_dir = os.path.join(self.checkpoint_path,self.checkpoint_name+"-"+str(epoch)+".pth")
-				self.checkpoint_manager_pointer = (self.checkpoint_manager_pointer+1)%self.max_to_keep
-				#delete checkpoint
-				if self.checkpoint_manager_list[self.checkpoint_manager_pointer] is not None:
-					if os.path.exists(self.checkpoint_manager_list[self.checkpoint_manager_pointer]):
-						os.remove(self.checkpoint_manager_list[self.checkpoint_manager_pointer])
-				#save checkpoint
-				torch.save(self.bsp_network.state_dict(), save_dir)
-				#update checkpoint manager
-				self.checkpoint_manager_list[self.checkpoint_manager_pointer] = save_dir
-				#write file
-				checkpoint_txt = os.path.join(self.checkpoint_path, "checkpoint")
-				fout = open(checkpoint_txt, 'w')
-				for i in range(self.max_to_keep):
-					pointer = (self.checkpoint_manager_pointer+self.max_to_keep-i)%self.max_to_keep
-					if self.checkpoint_manager_list[pointer] is not None:
-						fout.write(self.checkpoint_manager_list[pointer]+"\n")
-				fout.close()
+				self.save(epoch)
 
-		if not os.path.exists(self.checkpoint_path):
-			os.makedirs(self.checkpoint_path)
-		save_dir = os.path.join(self.checkpoint_path,self.checkpoint_name+"-"+str(training_epoch)+".pth")
-		self.checkpoint_manager_pointer = (self.checkpoint_manager_pointer+1)%self.max_to_keep
-		#delete checkpoint
-		if self.checkpoint_manager_list[self.checkpoint_manager_pointer] is not None:
-			if os.path.exists(self.checkpoint_manager_list[self.checkpoint_manager_pointer]):
-				os.remove(self.checkpoint_manager_list[self.checkpoint_manager_pointer])
-		#save checkpoint
-		torch.save(self.bsp_network.state_dict(), save_dir)
-		#update checkpoint manager
-		self.checkpoint_manager_list[self.checkpoint_manager_pointer] = save_dir
-		#write file
-		checkpoint_txt = os.path.join(self.checkpoint_path, "checkpoint")
-		fout = open(checkpoint_txt, 'w')
-		for i in range(self.max_to_keep):
-			pointer = (self.checkpoint_manager_pointer+self.max_to_keep-i)%self.max_to_keep
-			if self.checkpoint_manager_list[pointer] is not None:
-				fout.write(self.checkpoint_manager_list[pointer]+"\n")
-		fout.close()
+		self.save(training_epoch)
+
 
 	def test_1(self, config, name):
 		multiplier = int(self.real_size/self.test_size)
@@ -474,16 +482,7 @@ class BSP_SVR(object):
 	#output bsp shape as ply
 	def test_bsp(self, config):
 		#load previous checkpoint
-		checkpoint_txt = os.path.join(self.checkpoint_path, "checkpoint")
-		if os.path.exists(checkpoint_txt):
-			fin = open(checkpoint_txt)
-			model_dir = fin.readline().strip()
-			fin.close()
-			self.bsp_network.load_state_dict(torch.load(model_dir))
-			print(" [*] Load SUCCESS")
-		else:
-			print(" [!] Load failed...")
-			return
+		if not self.load(): exit(-1)
 		
 		w2 = self.bsp_network.generator.convex_layer_weights.detach().cpu().numpy()
 
@@ -533,9 +532,9 @@ class BSP_SVR(object):
 			print(len(bsp_convex_list))
 			
 			#convert bspt to mesh
-			vertices, polygons = get_mesh(bsp_convex_list)
+			#vertices, polygons = get_mesh(bsp_convex_list)
 			#use the following alternative to merge nearby vertices to get watertight meshes
-			#vertices, polygons = get_mesh_watertight(bsp_convex_list)
+			vertices, polygons = get_mesh_watertight(bsp_convex_list)
 
 			#output ply
 			write_ply_polygon(config.sample_dir+"/"+str(t)+"_bsp.ply", vertices, polygons)
@@ -543,16 +542,7 @@ class BSP_SVR(object):
 	#output bsp shape as ply and point cloud as ply
 	def test_mesh_point(self, config):
 		#load previous checkpoint
-		checkpoint_txt = os.path.join(self.checkpoint_path, "checkpoint")
-		if os.path.exists(checkpoint_txt):
-			fin = open(checkpoint_txt)
-			model_dir = fin.readline().strip()
-			fin.close()
-			self.bsp_network.load_state_dict(torch.load(model_dir))
-			print(" [*] Load SUCCESS")
-		else:
-			print(" [!] Load failed...")
-			return
+		if not self.load(): exit(-1)
 
 		w2 = self.bsp_network.generator.convex_layer_weights.detach().cpu().numpy()
 		dima = self.test_size
@@ -580,62 +570,101 @@ class BSP_SVR(object):
 			
 			out_m_ = out_m.detach().cpu().numpy()
 
-			bsp_convex_list = []
-			model_float = model_float<0.01
-			model_float_sum = np.sum(model_float,axis=3)
-			for i in range(self.c_dim):
-				slice_i = model_float[:,:,:,i]
-				if np.max(slice_i)>0: #if one voxel is inside a convex
-					#if np.min(model_float_sum-slice_i*2)>=0: #if this convex is redundant, i.e. the convex is inside the shape
-					#	model_float_sum = model_float_sum-slice_i
-					#else:
-						box = []
-						for j in range(self.p_dim):
-							if w2[j,i]>0.01:
-								a = -out_m_[0,0,j]
-								b = -out_m_[0,1,j]
-								c = -out_m_[0,2,j]
-								d = -out_m_[0,3,j]
-								box.append([a,b,c,d])
-						if len(box)>0:
-							bsp_convex_list.append(np.array(box,np.float32))
-							
-			#convert bspt to mesh
-			vertices, polygons = get_mesh(bsp_convex_list)
-			#use the following alternative to merge nearby vertices to get watertight meshes
-			#vertices, polygons = get_mesh_watertight(bsp_convex_list)
-
-			#output ply
-			write_ply_polygon(config.sample_dir+"/"+str(t)+"_bsp.ply", vertices, polygons)
+			# whether to use post processing to remove convexes that are inside the shape
+			post_processing_flag = False
 			
-			#sample surface points
-			sampled_points_normals = sample_points_polygon_vox64(vertices, polygons, model_float_combined, 16000)
-			#check point inside shape or not
-			point_coord = np.reshape(sampled_points_normals[:,:3]+sampled_points_normals[:,3:]*1e-4, [1,-1,3])
-			point_coord = np.concatenate([point_coord, np.ones([1,point_coord.shape[1],1],np.float32) ],axis=2)
-			point_coord = torch.from_numpy(point_coord)
-			point_coord = point_coord.to(self.device)
-			_,_,_, sample_points_value = self.bsp_network(None, None, out_m, point_coord, is_training=False)
-			sample_points_value = sample_points_value.detach().cpu().numpy()
-			sampled_points_normals = sampled_points_normals[sample_points_value[0,:,0]>1e-4]
-			print(len(bsp_convex_list), len(sampled_points_normals))
-			np.random.shuffle(sampled_points_normals)
-			write_ply_point_normal(config.sample_dir+"/"+str(t)+"_pc.ply", sampled_points_normals[:4096])
+			if post_processing_flag:
+				bsp_convex_list = []
+				model_float = model_float<0.01
+				model_float_sum = np.sum(model_float,axis=3)
+				unused_convex = np.ones([self.c_dim], np.float32)
+				for i in range(self.c_dim):
+					slice_i = model_float[:,:,:,i]
+					if np.max(slice_i)>0: #if one voxel is inside a convex
+						if np.min(model_float_sum-slice_i*2)>=0: #if this convex is redundant, i.e. the convex is inside the shape
+							model_float_sum = model_float_sum-slice_i
+						else:
+							box = []
+							for j in range(self.p_dim):
+								if w2[j,i]>0.01:
+									a = -out_m_[0,0,j]
+									b = -out_m_[0,1,j]
+									c = -out_m_[0,2,j]
+									d = -out_m_[0,3,j]
+									box.append([a,b,c,d])
+							if len(box)>0:
+								bsp_convex_list.append(np.array(box,np.float32))
+								unused_convex[i] = 0
+								
+				#convert bspt to mesh
+				#vertices, polygons = get_mesh(bsp_convex_list)
+				#use the following alternative to merge nearby vertices to get watertight meshes
+				vertices, polygons = get_mesh_watertight(bsp_convex_list)
+
+				#output ply
+				write_ply_polygon(config.sample_dir+"/"+str(t)+"_bsp.ply", vertices, polygons)
+				#output obj
+				#write_obj_polygon(config.sample_dir+"/"+str(t)+"_bsp.obj", vertices, polygons)
+				
+				#sample surface points
+				sampled_points_normals = sample_points_polygon(vertices, polygons, 16384)
+				#check point inside shape or not
+				point_coord = np.reshape(sampled_points_normals[:,:3]+sampled_points_normals[:,3:]*1e-4, [1,-1,3])
+				point_coord = np.concatenate([point_coord, np.ones([1,point_coord.shape[1],1],np.float32) ],axis=2)
+				_,_,_, sample_points_value = self.bsp_network(None, None, out_m, torch.from_numpy(point_coord).to(self.device), convex_mask=torch.from_numpy(np.reshape(unused_convex, [1,1,-1])).to(self.device), is_training=False)
+				sample_points_value = sample_points_value.detach().cpu().numpy()
+				sampled_points_normals = sampled_points_normals[sample_points_value[0,:,0]>1e-4]
+				print(len(bsp_convex_list), len(sampled_points_normals))
+				np.random.shuffle(sampled_points_normals)
+				write_ply_point_normal(config.sample_dir+"/"+str(t)+"_pc.ply", sampled_points_normals[:4096])
+			else:
+				bsp_convex_list = []
+				model_float = model_float<0.01
+				model_float_sum = np.sum(model_float,axis=3)
+				for i in range(self.c_dim):
+					slice_i = model_float[:,:,:,i]
+					if np.max(slice_i)>0: #if one voxel is inside a convex
+						#if np.min(model_float_sum-slice_i*2)>=0: #if this convex is redundant, i.e. the convex is inside the shape
+						#	model_float_sum = model_float_sum-slice_i
+						#else:
+							box = []
+							for j in range(self.p_dim):
+								if w2[j,i]>0.01:
+									a = -out_m_[0,0,j]
+									b = -out_m_[0,1,j]
+									c = -out_m_[0,2,j]
+									d = -out_m_[0,3,j]
+									box.append([a,b,c,d])
+							if len(box)>0:
+								bsp_convex_list.append(np.array(box,np.float32))
+								
+				#convert bspt to mesh
+				#vertices, polygons = get_mesh(bsp_convex_list)
+				#use the following alternative to merge nearby vertices to get watertight meshes
+				vertices, polygons = get_mesh_watertight(bsp_convex_list)
+
+				#output ply
+				write_ply_polygon(config.sample_dir+"/"+str(t)+"_bsp.ply", vertices, polygons)
+				#output obj
+				#write_obj_polygon(config.sample_dir+"/"+str(t)+"_bsp.obj", vertices, polygons)
+				
+				#sample surface points
+				sampled_points_normals = sample_points_polygon_vox64(vertices, polygons, model_float_combined, 16384)
+				#check point inside shape or not
+				point_coord = np.reshape(sampled_points_normals[:,:3]+sampled_points_normals[:,3:]*1e-4, [1,-1,3])
+				point_coord = np.concatenate([point_coord, np.ones([1,point_coord.shape[1],1],np.float32) ],axis=2)
+				_,_,_, sample_points_value = self.bsp_network(None, None, out_m, torch.from_numpy(point_coord).to(self.device), is_training=False)
+				sample_points_value = sample_points_value.detach().cpu().numpy()
+				sampled_points_normals = sampled_points_normals[sample_points_value[0,:,0]>1e-4]
+				print(len(bsp_convex_list), len(sampled_points_normals))
+				np.random.shuffle(sampled_points_normals)
+				write_ply_point_normal(config.sample_dir+"/"+str(t)+"_pc.ply", sampled_points_normals[:4096])
 
 
 	#output bsp shape as obj with color
 	def test_mesh_obj_material(self, config):
 		#load previous checkpoint
-		checkpoint_txt = os.path.join(self.checkpoint_path, "checkpoint")
-		if os.path.exists(checkpoint_txt):
-			fin = open(checkpoint_txt)
-			model_dir = fin.readline().strip()
-			fin.close()
-			self.bsp_network.load_state_dict(torch.load(model_dir))
-			print(" [*] Load SUCCESS")
-		else:
-			print(" [!] Load failed...")
-			return
+		if not self.load(): exit(-1)
 		
 		w2 = self.bsp_network.generator.convex_layer_weights.detach().cpu().numpy()
 
