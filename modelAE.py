@@ -293,7 +293,6 @@ class BSP_AE(object):
 			#cw3 - auxiliary weights W
 			def network_loss(G2,G,point_value,cw2,cw3):
 				loss_sp = torch.mean((point_value - G)**2)
-				torch.clamp(cw2-1, min=0)
 				loss = loss_sp + torch.sum(torch.abs(cw3-1)) + (torch.sum(torch.clamp(cw2-1, min=0) - torch.clamp(cw2, max=0)))
 				return loss_sp,loss
 			self.loss = network_loss
